@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Water Particle Simulator</title>
+    <style>
+        body, html {
+            margin: 0;
+            overflow: hidden;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #000;
+        }
+        canvas {
+            display: block;
+        }
+        #settingsContainer {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 100;
+            padding: 5px;
+            background-color: white;
+            border-radius: 5px;
+        }
+        #settingsButton {
+            cursor: pointer;
+            background-color: #44aaff;
+            padding: 5px 10px;
+            color: white;
+            border-radius: 5px;
+        }
+        #settingsDropdown {
+            display: none;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="settingsContainer">
+    <div id="settingsButton">Settings</div>
+    <div id="settingsDropdown">
+        <label>Add Squares:
+            <input type="checkbox" id="addSquaresCheckbox">
+        </label>
+        <br>
+        <label>Bounciness:
+            <input type="range" id="bouncinessSlider" min="0" max="1" step="0.1" value="0.5">
+        </label>
+        <br>
+        <label>Pick Color:
+            <input type="color" id="colorPicker" value="#44aaff">
+        </label>
+        <br>
+        <label>
+            <input type="checkbox" id="waterCheckbox"> Water
+        </label>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+<script>
+    // Three.js setup
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // Add light
+    const light = new THREE.DirectionalLight(0xffffff, 1);
+    light.position.set(5, 10, 5).normalize();
+    scene.add(light);
+
+    // Cannon.js physics world
+    const world = new CANNON.World();
+    world.gravity.set(0, -9.82, 0); // Gravity
+
+    // Floor boundary in physics world
+    const floorShape = new CANNON.Plane();
+    const floorBody = new CANNON.Body({ mass: 0 });
+    floorBody.addShape(floorShape);
+    floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);  // Horizontal ground
+    world.addBody(floorBody);
+
+    // Invisible ground plane in Three.js for raycasting
+    const groundGeometry = new THREE.PlaneGeometry(100, 100);
+    const groundMaterial = new THREE.MeshBasicMaterial({ visible: false });
+    const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+    ground.rotation.x = -Math.PI / 2;
+    scene.add(ground);
+
+    // Particles and physics bodies
+    const particles = [];
+    const particleBodies = [];
+    let currentColor = "#44aaff";  // Default color
+    let bounciness = 0.5;  // Default bounciness
+    const addSquares = document.getElementById('addSquaresCheckbox');
+    const colorPicker = document.getElementById('colorPicker');
+    const waterCheckbox = document.getElementById('waterCheckbox');
+
+    // Update color when color picker changes
+    colorPicker.addEventListener('input', (event) => {
+        currentColor = event.target.value;
+    });
+
+    function addParticle(x, y, z) {
+        const particleGeometry = addSquares.checked ? new THREE.BoxGeometry(0.2, 0.2, 0.2) : new THREE.SphereGeometry(0.1, 16, 16);
+        const particleMaterial = waterCheckbox.checked ? 
+            new THREE.MeshPhongMaterial({ color: new THREE.Color(currentColor), transparent: true, opacity: 0.6 }) :
+            new THREE.MeshBasicMaterial({ color: new THREE.Color(currentColor) });
+        
+        const particle = new THREE.Mesh(particleGeometry, particleMaterial);
+        particle.position.set(x, y, z);
+        scene.add(particle);
+        particles.push(particle);
+
+        // Add physics
+        const particleBody = new CANNON.Body({
+            mass: waterCheckbox.checked ? 0.1 : 1, // Lower mass for water
+            position: new CANNON.Vec3(x, y, z),
+            linearDamping: waterCheckbox.checked ? 0.9 : 0.0, // Increase damping for water
+            angularDamping: waterCheckbox.checked ? 0.9 : 0.0,
+        });
+        particleBody.material = new CANNON.Material();
+        particleBody.material.restitution = bounciness;  // Set bounciness
+        particleBody.addShape(addSquares.checked ? new CANNON.Box(new CANNON.Vec3(0.1, 0.1, 0.1)) : new CANNON.Sphere(0.1));
+        world.addBody(particleBody);
+        particleBodies.push(particleBody);
+    }
+
+    // Add some initial particles
+    for (let i = 0; i < 100; i++) {
+        const x = (Math.random() - 0.5) * 4;
+        const y = Math.random() * 4 + 2;
+        const z = (Math.random() - 0.5) * 4;
+        addParticle(x, y, z);
+    }
+
+    // OrbitControls to move around the scene
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.25;
+    controls.screenSpacePanning = false;
+    controls.minDistance = 5;
+    controls.maxDistance = 100;
+    controls.maxPolarAngle = Math.PI / 2;
+
+    // Raycaster for detecting mouse position
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    // Spacebar event for adding particles
+    document.addEventListener('keydown', (event) => {
+        if (event.code === 'Space') {
+            raycaster.setFromCamera(mouse, camera);
+
+            // Raycast to the invisible ground plane to determine where to drop particles
+            const intersects = raycaster.intersectObject(ground);
+            if (intersects.length > 0) {
+                const point = intersects[0].point;
+                addParticle(point.x, point.y, point.z);
+            }
+        }
+    });
+
+    // Update mouse position
+    document.addEventListener('mousemove', (event) => {
+        mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    });
+
+    // Settings dropdown behavior
+    const settingsButton = document.getElementById('settingsButton');
+    const settingsDropdown = document.getElementById('settingsDropdown');
+    const bouncinessSlider = document.getElementById('bouncinessSlider');
+
+    settingsButton.addEventListener('click', () => {
+        settingsDropdown.style.display = settingsDropdown.style.display === 'none' ? 'block' : 'none';
+    });
+
+    // Update bounciness from slider
+    bouncinessSlider.addEventListener('input', (event) => {
+        bounciness = parseFloat(event.target.value);
+    });
+
+    // Hide settings dropdown when clicking outside
+    document.addEventListener('click', (event) => {
+        if (!event.target.closest('#settingsContainer')) {
+            settingsDropdown.style.display = 'none';
+        }
+    });
+
+    // Disable context menu on right-click
+    window.addEventListener('contextmenu', (event) => event.preventDefault());
+
+    // Set camera position
+    camera.position.set(0, 10, 15);
+    camera.lookAt(0, 0, 0);
+
+    // Animation loop
+    function animate() {
+        requestAnimationFrame(animate);
+
+        // Update physics
+        world.step(1 / 60);
+        particleBodies.forEach((body, index) => {
+            particles[index].position.copy(body.position);
+        });
+
+        controls.update();  // Update camera controls
+        renderer.render(scene, camera);
+    }
+
+    animate();
+
+    // Handle window resize
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+</script>
+</body>
+</html>
